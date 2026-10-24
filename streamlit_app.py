@@ -376,6 +376,29 @@ h3, h5 { letter-spacing: -0.01em; }
 .ticker-track span { font-size: .82rem; color: #cbd5e1; font-weight: 500; margin-right: 52px; }
 @keyframes marquee { to { transform: translateX(-50%); } }
 
+
+/* ===== Role selector (segmented control) ===== */
+[data-testid="stButtonGroup"] {
+    display: flex !important; width: 100%; gap: 6px; padding: 5px; border-radius: 16px;
+    background: #080e1b; border: 1px solid var(--line); box-shadow: inset 0 2px 8px rgba(0,0,0,.35);
+}
+[data-testid="stButtonGroup"] button {
+    flex: 1 1 0 !important; min-height: 2.9rem; border-radius: 12px !important; border: 0 !important;
+    background: transparent !important; color: var(--muted) !important;
+    transition: background .25s var(--ease), transform .2s var(--ease), box-shadow .25s ease, color .2s ease !important;
+}
+[data-testid="stButtonGroup"] button p { color: inherit !important; font-weight: 600; font-size: .92rem; white-space: nowrap; }
+[data-testid="stButtonGroup"] button:hover { background: rgba(20,184,166,.12) !important; color: var(--teal-soft) !important; transform: translateY(-1px); }
+[data-testid="stBaseButton-segmented_controlActive"] {
+    background: linear-gradient(135deg, #14b8a6, #06b6d4 60%, #0ea5e9) !important;
+    color: #021a17 !important; box-shadow: 0 8px 20px rgba(20,184,166,.38), inset 0 1px 0 rgba(255,255,255,.35) !important;
+    animation: popIn .35s var(--ease) both;
+}
+[data-testid="stBaseButton-segmented_controlActive"] p { color: #021a17 !important; font-weight: 800; }
+[data-testid="stBaseButton-segmented_controlActive"]:hover { transform: translateY(-1px); filter: brightness(1.06); }
+/* panel under the selector re-animates on every switch */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.login-marker) [data-testid="stButtonGroup"] ~ div { animation: fadeUp .45s var(--ease) both; }
+
 @media (max-width: 900px) {
     .block-container { padding-top: 3.4rem !important; }
     .anim-title { font-size: clamp(1.8rem, 6vw, 2.5rem); }
@@ -684,6 +707,18 @@ OFFICE_SCENE = """
 """
 
 
+def role_selector(options, key):
+    """Segmented control when available (Streamlit >= 1.40), horizontal radio otherwise."""
+    if hasattr(st, "segmented_control"):
+        try:
+            return st.segmented_control("Sign in as", options, default=options[0], key=key,
+                                        label_visibility="collapsed", width="stretch")
+        except TypeError:  # older build without the width argument
+            return st.segmented_control("Sign in as", options, default=options[0], key=key,
+                                        label_visibility="collapsed")
+    return st.radio("Sign in as", options, horizontal=True, key=key, label_visibility="collapsed")
+
+
 def do_login(role, uid):
     me = get_emp(uid)
     ss.is_logged_in, ss.current_role, ss.current_user_id = True, role, uid
@@ -717,9 +752,11 @@ def render_login():
         st.markdown('<div style="height:2.6rem"></div>', unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="login-marker"></div>', unsafe_allow_html=True)
-            tabs = st.tabs(["🛡️ Admin Portal", "👥 HR Operations", "💼 Employee Portal"])
+            ROLE_OPTS = ["🛡️ Admin", "👥 HR", "💼 Employee"]
+            role_pick = role_selector(ROLE_OPTS, "login_role") or ROLE_OPTS[0]
+            st.markdown("")
 
-            with tabs[0]:
+            if role_pick == ROLE_OPTS[0]:
                 st.markdown("##### 🛡️ Company Administrator Login")
                 st.caption("Executive dashboard, org setup, user access, payroll lock and master audit trail.")
                 st.text_input("Admin Work Email", "asad.admin@technova.com", disabled=True, key="la_e")
@@ -727,7 +764,7 @@ def render_login():
                 if st.button("🚀 Sign In as Admin (M Atta Ur Rehman Khan)", use_container_width=True, type="primary", key="b_admin"):
                     do_login("Admin", "EMP001")
 
-            with tabs[1]:
+            elif role_pick == ROLE_OPTS[1]:
                 st.markdown("##### 👥 HR People Operations Login")
                 st.caption("Register employees, CSV import, attendance board, leave inbox and payroll runs.")
                 st.text_input("HR Work Email", "fatima.hr@technova.com", disabled=True, key="lh_e")
@@ -735,7 +772,7 @@ def render_login():
                 if st.button("🚀 Sign In as HR (Fatima Zahra)", use_container_width=True, type="primary", key="b_hr"):
                     do_login("HR", "EMP002")
 
-            with tabs[2]:
+            elif role_pick == ROLE_OPTS[2]:
                 st.markdown("##### 💼 Employee Self-Service Login")
                 st.caption("Check in/out, apply for leave, view payslips and chat with your AI assistant.")
                 staff = [e for e in ss.employees if e["role"] == "Employee"]
