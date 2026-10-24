@@ -1,0 +1,11 @@
+{
+  "name": "HCM Lite - AI-Assisted Human Capital Management",
+  "description": "Production HCM web platform for Saylani Hackathon with role-based access (Admin, HR, Employee), web/camera attendance, leave management, payroll lite with tax slabs, interactive dashboards, and Gemini AI assistant.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
