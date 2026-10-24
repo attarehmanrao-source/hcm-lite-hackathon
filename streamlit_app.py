@@ -19,6 +19,17 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+# ---- Pakistan Standard Time (UTC+5, no DST). Cloud servers run in UTC, so never use naive now().
+PKT = datetime.timezone(datetime.timedelta(hours=5))
+
+
+def now_pkt():
+    return datetime.datetime.now(PKT).replace(tzinfo=None)
+
+
+def today_pkt():
+    return now_pkt().date()
+
 # =====================================================================
 # PAGE CONFIG
 # =====================================================================
@@ -393,9 +404,10 @@ st.markdown("".join(
 def initialize_database():
     if "db_initialized" in st.session_state:
         return
-    today = datetime.date.today()
+    today = today_pkt()
     today_iso = today.isoformat()
     yest_iso = (today - datetime.timedelta(days=1)).isoformat()
+    d2_iso = (today - datetime.timedelta(days=2)).isoformat()
     ss = st.session_state
 
     ss.db_initialized = True
@@ -440,9 +452,9 @@ def initialize_database():
                     status=status, hours=hrs, method=method, dist_m=dist)
 
     ss.attendance = [
-        att("ATT-001", today_iso, "EMP001", "M Atta Ur Rehman Khan", "08:52", "17:30", "Present", 8.6, "Web", 42),
-        att("ATT-002", today_iso, "EMP002", "Fatima Zahra", "09:24", "18:10", "Late", 8.7, "Camera", 65),
-        att("ATT-003", today_iso, "EMP003", "Bilal Tariq", "09:05", "17:45", "Present", 8.6, "Web", 38),
+        att("ATT-001", d2_iso, "EMP001", "M Atta Ur Rehman Khan", "08:52", "17:30", "Present", 8.6, "Web", 42),
+        att("ATT-002", d2_iso, "EMP002", "Fatima Zahra", "09:24", "18:10", "Late", 8.7, "Camera", 65),
+        att("ATT-003", d2_iso, "EMP003", "Bilal Tariq", "09:05", "17:45", "Present", 8.6, "Web", 38),
         att("ATT-004", today_iso, "EMP005", "Zayn Ul Abidin", "09:32", "-", "Late", 0.0, "Camera", 80),
         att("ATT-090", yest_iso, "EMP002", "Fatima Zahra", "09:20", "18:00", "Late", 8.6, "Camera", 70),
         att("ATT-091", yest_iso, "EMP004", "Ayesha Siddiqui", "09:00", "13:30", "Half Day", 4.5, "Web", 55),
@@ -453,7 +465,7 @@ def initialize_database():
         start_date=today_iso, end_date=today_iso, working_days=1, reason="Family ceremony",
         status="Approved", applied_at=yest_iso, hr_comment="Approved as per casual quota.")]
 
-    ss.audit_trail = [dict(timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    ss.audit_trail = [dict(timestamp=now_pkt().strftime("%Y-%m-%d %H:%M:%S"),
                            actor="System", action="INITIALIZE", entity="CompanySetup",
                            details="Initialized HCM Lite parameters, departments and payroll rules")]
 
@@ -498,7 +510,7 @@ def compute_tax(annual):
 
 
 def log_audit(actor, action, entity, details):
-    ss.audit_trail.insert(0, dict(timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    ss.audit_trail.insert(0, dict(timestamp=now_pkt().strftime("%Y-%m-%d %H:%M:%S"),
                                   actor=actor, action=action, entity=entity, details=details))
 
 
@@ -535,7 +547,7 @@ def compute_payroll_row(e, month):
 
 def ai_reply(prompt, role, uid):
     """Gemini if key present, else rule-based assistant scoped by role."""
-    today = datetime.date.today().isoformat()
+    today = today_pkt().isoformat()
     me = get_emp(uid)
     key = os.environ.get("GEMINI_API_KEY")
 
@@ -698,7 +710,7 @@ def render_login():
                 <span class="chip">🤖 AI Assistant</span>
             </div>
         </div>""", unsafe_allow_html=True)
-        _today = datetime.date.today()
+        _today = today_pkt()
         st.markdown(OFFICE_SCENE.replace("__MON__", _today.strftime("%b").upper())
                                 .replace("__DAY__", str(_today.day)), unsafe_allow_html=True)
     with mid:
@@ -782,13 +794,13 @@ st.markdown(f"""
     <div>
         <div class="crumb">{selected_role} · Workspace</div>
         <div class="hcm-header-title">{page_title}</div>
-        <div class="hcm-header-sub">{ss.company_name} · {datetime.date.today().strftime('%A, %d %B %Y')}</div>
+        <div class="hcm-header-sub">{ss.company_name} · {today_pkt().strftime('%A, %d %B %Y')}</div>
     </div>
     <div class="live"><span class="dot"></span> Live</div>
 </div>""", unsafe_allow_html=True)
 
 import html as _html
-_today_iso = datetime.date.today().isoformat()
+_today_iso = today_pkt().isoformat()
 _items = [f"📢 {_html.escape(a['title'])}" for a in ss.announcements[:2]] + [
     f"👥 {len(ss.employees)} employees on roster",
     f"🕒 {sum(1 for a in ss.attendance if a['date'] == _today_iso)} checked in today",
@@ -815,7 +827,7 @@ def style_chart(c):
 def page_admin_dashboard():
     df_e = pd.DataFrame(ss.employees)
     df_a = pd.DataFrame(ss.attendance)
-    today = datetime.date.today().isoformat()
+    today = today_pkt().isoformat()
     t = df_a[df_a["date"] == today] if not df_a.empty else pd.DataFrame(columns=["status"])
 
     c1, c2, c3, c4 = st.columns(4)
@@ -858,7 +870,7 @@ def page_admin_dashboard():
 
 def page_hr_dashboard():
     df_e, df_a, df_l = pd.DataFrame(ss.employees), pd.DataFrame(ss.attendance), pd.DataFrame(ss.leaves)
-    today = datetime.date.today().isoformat()
+    today = today_pkt().isoformat()
     t = df_a[df_a["date"] == today] if not df_a.empty else pd.DataFrame(columns=["status"])
 
     c1, c2, c3, c4 = st.columns(4)
@@ -968,7 +980,7 @@ def page_add_employee():
         sal = c6.number_input("Monthly Basic Salary (PKR) *", min_value=15000, value=95000, step=5000)
         c7, c8 = st.columns(2)
         gender = c7.selectbox("Gender", ["Female", "Male", "Other"])
-        join = c8.date_input("Joining Date", datetime.date.today())
+        join = c8.date_input("Joining Date", today_pkt())
         c9, c10 = st.columns(2)
         phone = c9.text_input("Phone", "+92 300 0000000")
         addr = c10.text_input("Address", "Karachi, Pakistan")
@@ -1085,52 +1097,78 @@ required fields, email format & uniqueness, known department, ISO date, and `bas
 
 def page_attendance(own_only=False):
     uid = ss.current_user_id
-    today = datetime.date.today()
+    today = today_pkt()
     today_iso = today.isoformat()
-
-    if own_only or selected_role != "Employee":
-        pass
-    # ---- Check-in panel (any logged-in user for themselves) ----
     mine_today = next((a for a in ss.attendance if a["employee_id"] == uid and a["date"] == today_iso), None)
+    is_open = mine_today is not None and mine_today["check_out"] == "-"
+
     with st.container(border=True):
         st.markdown("##### 📍 Check In / Out (Geofenced)")
+
+        # Clear status so the user always knows why a button is (in)active
+        if mine_today is None:
+            st.info("You have not checked in today.")
+        elif is_open:
+            st.success(f"Checked in at **{mine_today['check_in']}** ({mine_today['status']}, {mine_today['method']}). "
+                       "Remember to check out before leaving.")
+        else:
+            st.success(f"Today's attendance is complete: in **{mine_today['check_in']}**, "
+                       f"out **{mine_today['check_out']}** · {mine_today['hours']} h · {mine_today['status']}.")
+
         st.caption("Simulate your GPS position. Defaults are inside the office radius.")
         g1, g2, g3 = st.columns(3)
         lat = g1.number_input("Your Latitude", value=float(ss.office_lat), format="%.5f", key="my_lat")
         lng = g2.number_input("Your Longitude", value=float(ss.office_lng), format="%.5f", key="my_lng")
-        method = g3.selectbox("Method", ["Web", "Camera"])
+        method = g3.selectbox("Method", ["Web", "Camera"], key="att_method")
         dist = haversine_distance(lat, lng, ss.office_lat, ss.office_lng)
         inside = dist <= ss.office_radius_m
         (st.success if inside else st.error)(
             f"You are **{dist} m** from office — {'inside' if inside else 'OUTSIDE'} the {ss.office_radius_m} m geofence.")
 
+        photo = None
+        if method == "Camera" and (mine_today is None or is_open):
+            photo = st.camera_input("📸 Take a selfie to verify your identity",
+                                    key=f"cam_{uid}_{'out' if mine_today else 'in'}")
+
         b1, b2 = st.columns(2)
-        if b1.button("🟢 Check In", use_container_width=True, disabled=mine_today is not None):
+        if b1.button("🟢 Check In", use_container_width=True, disabled=mine_today is not None, key="btn_in"):
             if not inside:
-                st.error("Check-in blocked: outside geofence.")
+                st.error("Check-in blocked: you are outside the office geofence.")
+            elif method == "Camera" and photo is None:
+                st.error("Camera mode needs a selfie. Take a photo above, then press Check In again.")
             else:
-                now = datetime.datetime.now()
-                limit = (datetime.datetime.combine(today, ss.office_start) +
-                         datetime.timedelta(minutes=ss.grace_minutes))
+                now = now_pkt()
+                limit = datetime.datetime.combine(today, ss.office_start) + datetime.timedelta(minutes=int(ss.grace_minutes))
                 status = "Late" if now > limit else "Present"
                 ss.attendance.append(dict(
                     id=f"ATT-{len(ss.attendance) + 1:03d}", date=today_iso, employee_id=uid, name=curr_user_name,
                     check_in=now.strftime("%H:%M"), check_out="-", status=status, hours=0.0,
                     method=method, dist_m=dist))
-                log_audit(curr_user_name, "CHECK_IN", "Attendance", f"{status} via {method}")
-                st.toast(f"Checked in — {status}", icon="🟢")
+                log_audit(curr_user_name, "CHECK_IN", "Attendance", f"{status} via {method}, {dist} m")
+                st.toast(f"Checked in at {now.strftime('%H:%M')} — {status}", icon="🟢")
                 st.rerun()
-        can_out = mine_today is not None and mine_today["check_out"] == "-"
-        if b2.button("🔴 Check Out", use_container_width=True, disabled=not can_out):
-            now = datetime.datetime.now()
-            h, m = map(int, mine_today["check_in"].split(":"))
-            hrs = round(max((now - now.replace(hour=h, minute=m)).total_seconds() / 3600, 0), 1)
-            mine_today.update(check_out=now.strftime("%H:%M"), hours=hrs)
-            if hrs < ss.half_day_hours:
-                mine_today["status"] = "Half Day"
-            log_audit(curr_user_name, "CHECK_OUT", "Attendance", f"{hrs} hours")
-            st.toast(f"Checked out — {hrs} h", icon="🔴")
-            st.rerun()
+
+        if b2.button("🔴 Check Out", use_container_width=True, disabled=not is_open, key="btn_out"):
+            if method == "Camera" and photo is None:
+                st.error("Camera mode needs a selfie. Take a photo above, then press Check Out again.")
+            else:
+                now = now_pkt()
+                h, m = map(int, mine_today["check_in"].split(":"))
+                started = datetime.datetime.combine(today, datetime.time(h, m))
+                hrs = round(max((now - started).total_seconds() / 3600, 0), 1)
+                mine_today.update(check_out=now.strftime("%H:%M"), hours=hrs)
+                if hrs < ss.half_day_hours:
+                    mine_today["status"] = "Half Day"
+                log_audit(curr_user_name, "CHECK_OUT", "Attendance", f"{hrs} hours via {method}")
+                st.toast(f"Checked out at {now.strftime('%H:%M')} — {hrs} h", icon="🔴")
+                st.rerun()
+
+        if mine_today is not None:
+            if st.button("🔄 Reset today's record (demo / testing)", key="btn_reset_att"):
+                ss.attendance.remove(mine_today)
+                log_audit(curr_user_name, "RESET_ATTENDANCE", "Attendance", f"Cleared record for {today_iso}")
+                st.toast("Today's record cleared — you can check in again", icon="🔄")
+                st.rerun()
 
     # ---- Records ----
     df = pd.DataFrame(ss.attendance)
@@ -1154,8 +1192,8 @@ def page_leaves(own_only=False):
         with st.form("leave_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             ltype = c1.selectbox("Type", list(ss.leave_quotas.keys()))
-            s = c2.date_input("From", datetime.date.today())
-            e = c3.date_input("To", datetime.date.today())
+            s = c2.date_input("From", today_pkt())
+            e = c3.date_input("To", today_pkt())
             reason = st.text_input("Reason")
             if st.form_submit_button("📨 Submit Request", type="primary", use_container_width=True):
                 if e < s:
@@ -1173,7 +1211,7 @@ def page_leaves(own_only=False):
                             leave_id=f"LV-{101 + len(ss.leaves)}", employee_id=uid, employee_name=curr_user_name,
                             leave_type=ltype, start_date=s.isoformat(), end_date=e.isoformat(),
                             working_days=days, reason=reason, status="Pending",
-                            applied_at=datetime.date.today().isoformat(), hr_comment=""))
+                            applied_at=today_pkt().isoformat(), hr_comment=""))
                         log_audit(curr_user_name, "APPLY_LEAVE", "Leave", f"{ltype}, {days} day(s)")
                         st.toast("Leave request submitted", icon="📨")
                         st.rerun()
@@ -1238,7 +1276,7 @@ def render_payslip(r):
 
 
 def page_payroll():
-    month = st.text_input("Payroll month (YYYY-MM)", datetime.date.today().strftime("%Y-%m"))
+    month = st.text_input("Payroll month (YYYY-MM)", today_pkt().strftime("%Y-%m"))
     if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
         st.error("Use format YYYY-MM, e.g. 2026-10")
         return
@@ -1275,7 +1313,7 @@ def page_payroll():
 
 
 def page_my_payslip():
-    month = st.text_input("Month (YYYY-MM)", datetime.date.today().strftime("%Y-%m"))
+    month = st.text_input("Month (YYYY-MM)", today_pkt().strftime("%Y-%m"))
     if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
         st.error("Use format YYYY-MM")
         return
@@ -1311,7 +1349,7 @@ def page_announcements():
         if st.form_submit_button("📢 Publish", type="primary", use_container_width=True):
             if t.strip() and body.strip():
                 ss.announcements.insert(0, dict(id=len(ss.announcements) + 1, title=t,
-                                                date=datetime.date.today().isoformat(),
+                                                date=today_pkt().isoformat(),
                                                 author=curr_user_name, content=body))
                 log_audit(curr_user_name, "ANNOUNCE", "Announcement", t)
                 st.toast("Announcement published", icon="📢")
