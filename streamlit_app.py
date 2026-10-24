@@ -338,7 +338,9 @@ h3, h5 { letter-spacing: -0.01em; }
 .cal { animation: bob 4s ease-in-out infinite; }
 .bar { transform-origin: 50% 100%; animation: barGrow 3.2s ease-in-out infinite alternate; }
 @keyframes barGrow { 0% { transform: scaleY(.3); } 100% { transform: scaleY(1); } }
-.trend { stroke-dasharray: 260; stroke-dashoffset: 260; animation: draw 5s ease-in-out infinite; }
+/* FIX: default is fully visible (offset 0). Only the animation itself starts from 260,
+   so the trend line never disappears if animations are blocked/disabled. */
+.trend { stroke-dasharray: 260; stroke-dashoffset: 0; animation: draw 5s ease-in-out infinite; }
 @keyframes draw { 0% { stroke-dashoffset: 260; } 60%,100% { stroke-dashoffset: 0; } }
 .pulse-dot { animation: blink 1.2s ease-in-out infinite; }
 .head { animation: nod 2.8s ease-in-out infinite; }
@@ -405,9 +407,24 @@ h3, h5 { letter-spacing: -0.01em; }
     .dev-name { font-size: clamp(2rem, 7vw, 3rem); }
     .hcm-header { padding: 16px; flex-direction: column; align-items: flex-start; }
 }
+
+/* FIX: "Reduce motion" used to freeze EVERY animation (clock stuck at 12, bars full, line hidden).
+   Now the heavy page-wide motion (background, orbs, particles, ticker, entrances) is still
+   calmed for accessibility, but the small office scene on the login page keeps running. */
 @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    *:not(.scene-wrap):not(.scene-wrap *), *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
+    /* make sure the scene (and its own children) keep their original timings */
+    .scene-wrap, .scene-wrap * {
+        animation-iteration-count: infinite !important;
+    }
+    .scene-wrap { animation: none !important; opacity: 1 !important; transform: none !important; }
+    .hand-m { animation-duration: 12s !important; }
+    .hand-h { animation-duration: 144s !important; }
 }
 </style>
 <div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div>
