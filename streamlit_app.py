@@ -9,15 +9,20 @@ Optional AI: set env var GEMINI_API_KEY for Gemini replies
 """
 
 import datetime
+import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import secrets
 import urllib.request
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+import db  # Supabase backend (db.py must sit in the same folder)
 
 # ---- Pakistan Standard Time (UTC+5, no DST). Cloud servers run in UTC, so never use naive now().
 PKT = datetime.timezone(datetime.timedelta(hours=5))
@@ -45,7 +50,7 @@ st.set_page_config(
 # =====================================================================
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Great+Vibes&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@500;600;700&display=swap');
 @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
 
 :root {
@@ -141,37 +146,51 @@ body, [data-testid="stAppViewContainer"] { color: var(--text); }
 
 /* ---------- Login hero ---------- */
 .hero { max-width: 700px; margin: 0 auto 18px; text-align: center; }
-.logo-wrap { position: relative; display: inline-block; }
-.logo-wrap::before, .logo-wrap::after {
-    content: ""; position: absolute; inset: 0; border-radius: 18px; border: 2px solid var(--teal-soft);
-    animation: ripple 3s ease-out infinite; }
-.logo-wrap::after { animation-delay: 1.5s; }
-.logo-badge {
-    position: relative; display: inline-block; padding: 14px 24px; border-radius: 18px;
-    font-weight: 900; font-size: 26px; letter-spacing: .08em; color: #022c22;
-    background: linear-gradient(135deg, #14b8a6, #06b6d4, #8b5cf6, #14b8a6); background-size: 300% 300%;
-    box-shadow: 0 0 36px rgba(20,184,166,.55);
-    animation: logoFloat 4s ease-in-out infinite, gradShift 6s ease-in-out infinite alternate; overflow: hidden;
-}
-.logo-badge::after { content: ""; position: absolute; top: 0; left: 0; width: 40%; height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
-    animation: sweep 3.2s ease-in-out infinite; }
+
+/* animated HCM badge */
+@keyframes hcmFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+@keyframes hcmShine { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes hcmPulse { 0% { transform: scale(.85); opacity: .7; } 100% { transform: scale(1.65); opacity: 0; } }
+@keyframes hcmSpin { to { transform: rotate(360deg); } }
+@keyframes hcmTwinkle { 0%,100% { opacity: .25; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.2); } }
+.hcm-orb { position: relative; width: 118px; height: 118px; margin: 0 auto 4px; display: flex; align-items: center; justify-content: center;
+           animation: hcmFloat 4s ease-in-out infinite; }
+.hcm-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--teal-soft); animation: hcmPulse 2.6s ease-out infinite; }
+.hcm-ring.r2 { animation-delay: 1.3s; }
+.hcm-orbit { position: absolute; inset: -7px; border-radius: 50%; border: 2px dashed rgba(45,212,191,.45); animation: hcmSpin 14s linear infinite; }
+.hcm-core { position: relative; width: 94px; height: 94px; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: linear-gradient(135deg,#14b8a6,#06b6d4 55%,#6366f1);
+            box-shadow: 0 0 36px rgba(20,184,166,.55), inset 0 0 0 2px rgba(255,255,255,.25); overflow: hidden; }
+.hcm-core::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.45) 50%, transparent 70%);
+                   background-size: 200% 100%; animation: hcmShine 3.2s linear infinite; }
+.hcm-emoji { font-size: 30px; line-height: 1; z-index: 1; }
+.hcm-abbr { font-weight: 800; letter-spacing: 4px; font-size: 17px; color: #fff; z-index: 1; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.25); }
+.hcm-spark { position: absolute; font-size: 16px; animation: hcmTwinkle 2.4s ease-in-out infinite; }
+.hcm-spark.s1 { top: -8px; right: -6px; }
+.hcm-spark.s2 { bottom: -4px; left: -10px; animation-delay: 1.2s; }
+
 .anim-title {
-    font-size: 2.7rem; font-weight: 800; margin: 16px 0 4px; letter-spacing: -0.02em;
-    background: linear-gradient(90deg,#fff,#5eead4,#a78bfa,#f472b6,#fcd34d,#5eead4);
-    background-size: 300% 100%; -webkit-background-clip: text; background-clip: text;
+    font-family: 'Poppins', 'Inter', sans-serif; font-size: 2.7rem; font-weight: 700; margin: 12px 0 2px; letter-spacing: -0.01em;
+    background: linear-gradient(90deg,#ffffff,#99f6e4,#67e8f9,#c4b5fd);
+    background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
     animation: gradShift 8s ease-in-out infinite alternate, fadeUp .9s var(--ease) both;
 }
-.sub-title { color: var(--teal-soft); font-size: 1.1rem; font-weight: 600; margin: 4px 0 14px; }
-.dev-name {
-    font-family: 'Great Vibes', cursive; font-size: 3.1rem; line-height: 1.2;
-    background: linear-gradient(90deg,#14b8a6,#fcd34d,#f472b6,#8b5cf6,#14b8a6);
-    background-size: 300% 100%; -webkit-background-clip: text; background-clip: text;
-    -webkit-text-fill-color: transparent; filter: drop-shadow(0 0 14px rgba(20,184,166,.4));
-    animation: gradShift 6s ease-in-out infinite alternate;
-}
-.dev-sub { letter-spacing: .3em; text-transform: uppercase; font-size: .7rem; color: var(--muted); margin-top: 2px; }
+.hcm-full { font-family: 'Poppins', 'Inter', sans-serif; font-size: .92rem; font-weight: 600; letter-spacing: .26em; text-transform: uppercase; margin-bottom: 6px; }
+.hcm-full .ico { letter-spacing: 0; margin-right: 6px; }
+.hcm-full .txt { background: linear-gradient(90deg,#5eead4,#67e8f9,#a5b4fc,#5eead4); background-size: 200% auto;
+                 -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: hcmShine 5s linear infinite; }
+.sub-title { color: var(--muted); font-size: 1rem; font-weight: 500; margin: 4px 0 16px; }
+
+/* developer card */
+.hcm-dev { width: min(430px, 100%); margin: 0 auto; padding: 14px 20px 16px; border-radius: 18px; text-align: center;
+           background: linear-gradient(135deg, rgba(20,184,166,.12), rgba(99,102,241,.10)); border: 1px solid rgba(94,234,212,.28);
+           box-shadow: 0 10px 32px rgba(0,0,0,.35); backdrop-filter: blur(8px); }
+.hcm-dev-label { font-size: .64rem; letter-spacing: .38em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.hcm-dev-name { font-family: 'Poppins', 'Inter', sans-serif; font-size: 1.45rem; font-weight: 600; color: #f1f5f9; margin: 6px 0 8px; letter-spacing: .01em; }
+.hcm-dev-line { height: 2px; width: 70px; margin: 0 auto 10px; border-radius: 2px; background: linear-gradient(90deg, #14b8a6, #6366f1); }
+.hcm-dev-roll { display: inline-block; font-size: .72rem; letter-spacing: .18em; color: #a5f3fc; padding: 4px 14px; border-radius: 999px;
+                border: 1px solid rgba(103,232,249,.35); background: rgba(6,182,212,.08); }
 .muted-text { color: var(--muted); font-size: .92rem; line-height: 1.7; margin: 16px auto 0; max-width: 520px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 18px; }
@@ -203,12 +222,31 @@ body, [data-testid="stAppViewContainer"] { color: var(--text); }
 .hcm-header::after { content: ""; position: absolute; top: 0; left: 0; width: 30%; height: 100%;
     background: linear-gradient(90deg, transparent, rgba(94,234,212,.10), transparent); animation: sweep 6s ease-in-out infinite; }
 .crumb { font-size: .72rem; letter-spacing: .18em; text-transform: uppercase; color: var(--teal-soft); font-weight: 700; }
-.hcm-header-title {
-    font-size: 1.75rem; font-weight: 800; margin: 2px 0 0; letter-spacing: -0.025em;
+.hcm-header-title { display: flex; align-items: center; gap: 12px; font-size: 1.75rem; font-weight: 800; margin: 2px 0 0; letter-spacing: -0.025em;
+    animation: slideIn .6s var(--ease) both; }
+.hcm-header-title .ico { font-size: 1.55rem; line-height: 1; }
+.hcm-header-title .txt {
     background: linear-gradient(90deg,#fff,#5eead4,#a78bfa,#fff); background-size: 300% 100%;
     -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-    animation: gradShift 8s ease-in-out infinite alternate, slideIn .6s var(--ease) both;
+    animation: gradShift 8s ease-in-out infinite alternate;
 }
+.hdr-right { display: flex; align-items: center; gap: 18px; z-index: 1; }
+.mini { position: relative; width: 156px; height: 66px; flex: none; animation: popIn .8s .2s var(--ease) both; }
+.mini svg { width: 100%; height: 100%; overflow: visible; }
+.mini svg * { transform-box: fill-box; }
+.mini-ring { transform-origin: center; animation: ripple 2.4s ease-out infinite; }
+.mini-emoji { position: absolute; top: -12px; right: -8px; font-size: 20px; animation: bob 3s ease-in-out infinite; filter: drop-shadow(0 4px 8px rgba(0,0,0,.4)); }
+@media (max-width: 900px) { .mini { display: none; } }
+.m-rot { transform-origin: center; animation: hcmSpin 9s linear infinite; }
+.m-flow { stroke-dasharray: 4 4; animation: mFlow 1.2s linear infinite; }
+@keyframes mFlow { to { stroke-dashoffset: -8; } }
+.m-doc { opacity: 0; animation: mSlide 4s ease-in-out infinite; }
+@keyframes mSlide { 0% { transform: translateX(0); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(78px); opacity: 0; } }
+.m-bounce { animation: mBounce 1.6s ease-in-out infinite; }
+@keyframes mBounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+.m-geo { transform-origin: center; animation: mGeo 2.4s ease-out infinite; }
+.m-geo.g2 { animation-delay: -1.2s; }
+@keyframes mGeo { 0% { transform: scale(.4); opacity: .9; } 100% { transform: scale(1.4); opacity: 0; } }
 .hcm-header-sub { color: var(--muted); font-size: .88rem; margin-top: 4px; }
 .live { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px; font-size: .75rem; font-weight: 700;
         color: #bbf7d0; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.4); white-space: nowrap; z-index: 1; }
@@ -280,7 +318,8 @@ body, [data-testid="stAppViewContainer"] { color: var(--text); }
 
 /* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] { background: linear-gradient(180deg, rgba(8,15,29,.98), rgba(9,20,34,.96)); border-right: 1px solid rgba(94,234,212,.16); }
-.side-brand { font-weight: 800; font-size: 1.15rem; margin-bottom: 14px; background: linear-gradient(90deg,#fff,#5eead4); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: slideIn .6s var(--ease) both; }
+.side-brand { font-weight: 800; font-size: 1.15rem; margin-bottom: 14px; animation: slideIn .6s var(--ease) both; }
+.side-brand .txt { background: linear-gradient(90deg,#fff,#5eead4); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .side-card { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: rgba(20,184,166,.07); border: 1px solid rgba(94,234,212,.2); animation: popIn .7s var(--ease) both; }
 .avatar { position: relative; flex: none; width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #021a17;
           background: linear-gradient(135deg, #14b8a6, #8b5cf6); }
@@ -324,7 +363,9 @@ h3, h5 { letter-spacing: -0.01em; }
 .stTabs button[role="tab"][aria-selected="true"] { background: linear-gradient(90deg,#14b8a6,#06b6d4) !important; box-shadow: 0 6px 18px rgba(20,184,166,.4); }
 
 /* ===== Animated office scene ===== */
-.scene-wrap { margin-top: 22px; animation: popIn .9s .5s var(--ease) both; }
+.scene-wrap { max-width: 920px; margin: 34px auto 0; animation: popIn .9s .5s var(--ease) both; }
+.scene-caption { text-align: center; color: var(--muted); font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; margin: 14px 0 4px; }
+.scene-caption b { color: var(--teal-soft); font-weight: 600; }
 .office { width: 100%; height: auto; filter: drop-shadow(0 18px 36px rgba(20,184,166,.18)); }
 .office * { transform-box: fill-box; }
 .hand-m { transform-origin: 50% 100%; animation: tick 12s linear infinite; }
@@ -404,7 +445,7 @@ h3, h5 { letter-spacing: -0.01em; }
 @media (max-width: 900px) {
     .block-container { padding-top: 3.4rem !important; }
     .anim-title { font-size: clamp(1.8rem, 6vw, 2.5rem); }
-    .dev-name { font-size: clamp(2rem, 7vw, 3rem); }
+    .hcm-dev-name { font-size: clamp(1.15rem, 5vw, 1.45rem); }
     .hcm-header { padding: 16px; flex-direction: column; align-items: flex-start; }
 }
 
@@ -515,6 +556,8 @@ def initialize_database():
 
 
 initialize_database()
+db.load_into_session()
+db.sync()
 ss = st.session_state
 
 # =====================================================================
@@ -558,8 +601,102 @@ def get_emp(eid):
     return next((e for e in ss.employees if e["employee_id"] == eid), None)
 
 
+MIN_PW = 6
+_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no look-alike characters (0/O, 1/I)
+
+
+def _public(e):
+    """Employee record without secrets (safe to show / send to the AI)."""
+    return {k: v for k, v in e.items() if k not in ("password_hash", "recovery_hash")}
+
+
+def hash_password(pw):
+    salt = os.urandom(16).hex()
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 120_000).hex()
+    return f"{salt}${h}"
+
+
+def _verify(stored, secret):
+    try:
+        salt, h = stored.split("$")
+        calc = hashlib.pbkdf2_hmac("sha256", (secret or "").encode(), bytes.fromhex(salt), 120_000).hex()
+        return hmac.compare_digest(calc, h)
+    except Exception:
+        return False
+
+
+def check_password(e, pw):
+    """True if the password matches. Accounts with no password set yet sign in freely (demo mode)."""
+    stored = e.get("password_hash")
+    if not stored:
+        return True
+    return _verify(stored, pw)
+
+
+def _norm_code(code):
+    return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
+
+
+def make_recovery_code():
+    raw = "".join(secrets.choice(_CODE_CHARS) for _ in range(12))
+    return "-".join(raw[i:i + 4] for i in range(0, 12, 4))
+
+
+def _master_key():
+    """Optional emergency key from Streamlit secrets (ADMIN_RESET_KEY). Empty if not configured."""
+    try:
+        return str(st.secrets["ADMIN_RESET_KEY"]).strip()
+    except Exception:
+        return ""
+
+
+def verify_recovery(e, proof):
+    """True for this account's recovery code (or the optional ADMIN_RESET_KEY secret)."""
+    proof = (proof or "").strip()
+    if not proof:
+        return False
+    master = _master_key()
+    if master and hmac.compare_digest(proof.encode(), master.encode()):
+        return True
+    stored = e.get("recovery_hash")
+    return bool(stored) and _verify(stored, _norm_code(proof))
+
+
+def set_password(e, pw):
+    """Save a new password and issue a fresh recovery code (returned in plain text, shown once)."""
+    code = make_recovery_code()
+    e["password_hash"] = hash_password(pw)
+    e["recovery_hash"] = hash_password(_norm_code(code))
+    e["first_login"] = False
+    return code
+
+
+def pw_problem(new, new2):
+    if len(new) < MIN_PW:
+        return f"Password must be at least {MIN_PW} characters."
+    if new != new2:
+        return "The two passwords do not match."
+    return None
+
+
+def too_many_attempts(uid):
+    return ss.setdefault("fp_fails", {}).get(uid, 0) >= 5
+
+
+def note_attempt(uid, ok):
+    fails = ss.setdefault("fp_fails", {})
+    fails[uid] = 0 if ok else fails.get(uid, 0) + 1
+
+
+def next_num(rows, key, prefix, default=0):
+    """Next number after the highest existing ID like PREFIX123 (safe even after deletions)."""
+    nums = [int(m.group(1)) for r in rows
+            if (m := re.match(rf"{re.escape(prefix)}(\d+)$", str(r[key])))]
+    return (max(nums) if nums else default) + 1
+
+
 def next_emp_id():
-    return f"EMP{len(ss.employees) + 1:03d}"
+    return f"EMP{next_num(ss.employees, 'employee_id', 'EMP'):03d}"
 
 
 def compute_payroll_row(e, month):
@@ -592,11 +729,11 @@ def ai_reply(prompt, role, uid):
     key = os.environ.get("GEMINI_API_KEY")
 
     if role == "Employee":
-        scope = {"employee": me,
+        scope = {"employee": _public(me),
                  "attendance": [a for a in ss.attendance if a["employee_id"] == uid],
                  "leaves": [l for l in ss.leaves if l["employee_id"] == uid]}
     else:
-        scope = {"employees": ss.employees, "attendance": ss.attendance, "leaves": ss.leaves}
+        scope = {"employees": [_public(e) for e in ss.employees], "attendance": ss.attendance, "leaves": ss.leaves}
 
     if key:
         try:
@@ -743,16 +880,103 @@ def do_login(role, uid):
     st.rerun()
 
 
+def recovery_box(uid, key):
+    """Shows the freshly issued recovery code (once). Returns True while it is on screen."""
+    sc = ss.get("show_code")
+    if not sc or sc["uid"] != uid:
+        return False
+    st.success("✅ Password saved.")
+    st.warning("Save this recovery code now. It is shown only once and lets you reset a forgotten password.")
+    st.code(sc["code"], language=None)
+    if st.button("✅ I have saved it", key=f"saved_{key}", use_container_width=True):
+        ss.show_code = None
+        st.rerun()
+    return True
+
+
+def role_login_panel(role, title, caption):
+    """Login card for one role. No password set -> just sign in; once set, it is always required."""
+    accts = [e for e in ss.employees if e["role"] == role]
+    st.markdown(f"##### {title}")
+    st.caption(caption)
+    if not accts:
+        st.error(f"No {role} account exists.")
+        return
+    if len(accts) > 1:
+        uid = st.selectbox("Choose account", [e["employee_id"] for e in accts],
+                           format_func=lambda i: f"{get_emp(i)['name']} — {get_emp(i)['designation']}",
+                           key=f"sel_{role}")
+    else:
+        uid = accts[0]["employee_id"]
+    acct = get_emp(uid)
+    st.text_input("Work Email", acct["email"], disabled=True, key=f"em_{role}_{uid}")
+
+    if recovery_box(uid, f"login_{role}"):
+        return
+    if acct.get("status") != "Active":
+        st.error("This account is deactivated. Please contact the Admin.")
+        return
+
+    # ---- Normal sign-in ----
+    has_pw = bool(acct.get("password_hash"))
+    pw = st.text_input("Password", type="password", key=f"pw_{role}_{uid}",
+                       placeholder="Enter your password" if has_pw else "No password set yet — just sign in")
+    if st.button(f"🚀 Sign In as {role} ({acct['name']})", use_container_width=True,
+                 type="primary", key=f"b_{role}"):
+        if not check_password(acct, pw):
+            st.error("Incorrect password.")
+        else:
+            do_login(role, uid)
+
+    # ---- Forgot password (only meaningful once a password has been set) ----
+    if not has_pw:
+        return
+    with st.expander("🔑 Forgot password?"):
+        if not acct.get("recovery_hash") and not _master_key():
+            st.info("No recovery code is saved for this account. Please ask the Admin to set a temporary password for you.")
+        else:
+            st.caption("Enter the recovery code you received when you created your password, then choose a new password.")
+            with st.form(f"fp_{role}_{uid}"):
+                code_in = st.text_input("Recovery code", placeholder="XXXX-XXXX-XXXX", key=f"fpc_{role}_{uid}")
+                f1 = st.text_input("New password", type="password", key=f"fp1_{role}_{uid}")
+                f2 = st.text_input("Confirm new password", type="password", key=f"fp2_{role}_{uid}")
+                if st.form_submit_button("🔄 Reset Password", use_container_width=True):
+                    if too_many_attempts(uid):
+                        st.error("Too many wrong attempts. Please ask the Admin to set a temporary password.")
+                    elif not verify_recovery(acct, code_in):
+                        note_attempt(uid, False)
+                        st.error("Recovery code is incorrect.")
+                    else:
+                        err = pw_problem(f1, f2)
+                        if err:
+                            st.error(err)
+                        else:
+                            note_attempt(uid, True)
+                            code = set_password(acct, f1)
+                            ss.show_code = {"uid": uid, "code": code}
+                            log_audit(acct["name"], "RESET_PASSWORD_SELF", "UserAuth", "Reset password with recovery code")
+                            st.rerun()
+
+
 def render_login():
     left, mid = st.columns([1.15, 1], gap="large")
     with left:
         st.markdown("""
         <div class="hero">
-            <div class="logo-wrap"><div class="logo-badge">HCM</div></div>
-            <h1 class="anim-title">Saylani Hackathon 2026</h1>
-            <div class="sub-title fade-up d2">HCM Lite — AI-Assisted Human Capital Management</div>
-            <div class="dev-name fade-up d3">M Atta ur Rehman Khan</div>
-            <div class="dev-sub fade-up d3">Developer · Roll No 777760</div>
+            <div class="hcm-orb">
+                <div class="hcm-ring"></div><div class="hcm-ring r2"></div><div class="hcm-orbit"></div>
+                <span class="hcm-spark s1">✨</span><span class="hcm-spark s2">💫</span>
+                <div class="hcm-core"><div class="hcm-emoji">👥</div><div class="hcm-abbr">HCM</div></div>
+            </div>
+            <h1 class="anim-title">HCM Lite</h1>
+            <div class="hcm-full fade-up d1"><span class="ico">🏢</span><span class="txt">Human Capital Management</span></div>
+            <div class="sub-title fade-up d2">✨ AI-Assisted workforce platform for modern teams</div>
+            <div class="hcm-dev fade-up d3">
+                <div class="hcm-dev-label">Developed by</div>
+                <div class="hcm-dev-name">M Atta ur Rehman Khan</div>
+                <div class="hcm-dev-line"></div>
+                <div class="hcm-dev-roll">ROLL NO &nbsp;777760</div>
+            </div>
             <p class="muted-text fade-up d4">Select your role to enter. Each role has its own menus,
             permissions and AI assistant scope.</p>
             <div class="chips">
@@ -762,11 +986,8 @@ def render_login():
                 <span class="chip">🤖 AI Assistant</span>
             </div>
         </div>""", unsafe_allow_html=True)
-        _today = today_pkt()
-        st.markdown(OFFICE_SCENE.replace("__MON__", _today.strftime("%b").upper())
-                                .replace("__DAY__", str(_today.day)), unsafe_allow_html=True)
     with mid:
-        st.markdown('<div style="height:2.6rem"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:3rem"></div>', unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="login-marker"></div>', unsafe_allow_html=True)
             ROLE_OPTS = ["🛡️ Admin", "👥 HR", "💼 Employee"]
@@ -774,31 +995,22 @@ def render_login():
             st.markdown("")
 
             if role_pick == ROLE_OPTS[0]:
-                st.markdown("##### 🛡️ Company Administrator Login")
-                st.caption("Executive dashboard, org setup, user access, payroll lock and master audit trail.")
-                st.text_input("Admin Work Email", "asad.admin@technova.com", disabled=True, key="la_e")
-                st.text_input("Master Password", "••••••••", type="password", disabled=True, key="la_p")
-                if st.button("🚀 Sign In as Admin (M Atta Ur Rehman Khan)", use_container_width=True, type="primary", key="b_admin"):
-                    do_login("Admin", "EMP001")
-
+                role_login_panel("Admin", "🛡️ Company Administrator Login",
+                                 "Executive dashboard, org setup, user access, payroll lock and master audit trail.")
             elif role_pick == ROLE_OPTS[1]:
-                st.markdown("##### 👥 HR People Operations Login")
-                st.caption("Register employees, CSV import, attendance board, leave inbox and payroll runs.")
-                st.text_input("HR Work Email", "fatima.hr@technova.com", disabled=True, key="lh_e")
-                st.text_input("HR Password", "••••••••", type="password", disabled=True, key="lh_p")
-                if st.button("🚀 Sign In as HR (Fatima Zahra)", use_container_width=True, type="primary", key="b_hr"):
-                    do_login("HR", "EMP002")
-
+                role_login_panel("HR", "👥 HR People Operations Login",
+                                 "Register employees, CSV import, attendance board, leave inbox and payroll runs.")
             elif role_pick == ROLE_OPTS[2]:
-                st.markdown("##### 💼 Employee Self-Service Login")
-                st.caption("Check in/out, apply for leave, view payslips and chat with your AI assistant.")
-                staff = [e for e in ss.employees if e["role"] == "Employee"]
-                pick = st.selectbox("Choose employee account", [e["employee_id"] for e in staff],
-                                    format_func=lambda i: f"{get_emp(i)['name']} — {get_emp(i)['designation']}")
-                st.text_input("Password", "••••••••", type="password", disabled=True, key="le_p")
-                if st.button("🚀 Sign In as Employee", use_container_width=True, type="primary", key="b_emp"):
-                    do_login("Employee", pick)
+                role_login_panel("Employee", "💼 Employee Self-Service Login",
+                                 "Check in/out, apply for leave, view payslips and chat with your AI assistant.")
 
+    # Wide animated scene spanning the full width under both columns
+    _today = today_pkt()
+    st.markdown(OFFICE_SCENE.replace("__MON__", _today.strftime("%b").upper())
+                            .replace("__DAY__", str(_today.day)), unsafe_allow_html=True)
+    st.markdown('<div class="scene-caption"><b>Attendance</b> &nbsp;·&nbsp; <b>Leave</b> &nbsp;·&nbsp; '
+                '<b>Payroll</b> &nbsp;·&nbsp; <b>AI</b> — one platform for your whole team</div>',
+                unsafe_allow_html=True)
 
 if not ss.is_logged_in:
     render_login()
@@ -824,7 +1036,7 @@ BADGE = {"Admin": "badge-admin", "HR": "badge-hr", "Employee": "badge-emp"}
 with st.sidebar:
     _ini = "".join(w[0] for w in curr_user_name.split()[:2]).upper()
     st.markdown(f"""
-    <div class="side-brand">🏢 {ss.company_name}</div>
+    <div class="side-brand"><span class="ico">🏢</span> <span class="txt">{ss.company_name}</span></div>
     <div class="side-card">
         <div class="avatar">{_ini}</div>
         <div>
@@ -836,21 +1048,115 @@ with st.sidebar:
     st.markdown("---")
     nav_choice = st.radio("Navigation", MENUS[selected_role], label_visibility="collapsed")
     st.markdown("---")
+    with st.expander("🔑 Change Password", expanded=bool(me.get("first_login")) or bool(ss.get("show_code"))):
+        if not recovery_box(me["employee_id"], "side"):
+            has_pw = bool(me.get("password_hash"))
+            if me.get("first_login"):
+                st.caption("Please set your own password.")
+            elif not has_pw:
+                st.caption("No password set yet. Choose one below to protect your account.")
+            forgot = st.checkbox("I forgot my current password", key="cp_forgot") if has_pw else False
+            if forgot:
+                st.caption("Use the recovery code you received when you created your password.")
+            with st.form("pw_form", clear_on_submit=True):
+                proof = ""
+                if has_pw:
+                    proof = st.text_input("Recovery code" if forgot else "Current password",
+                                          type="default" if forgot else "password")
+                new_pw = st.text_input("New password", type="password")
+                new_pw2 = st.text_input("Confirm new password", type="password")
+                if st.form_submit_button("Update Password", use_container_width=True):
+                    uid_ = me["employee_id"]
+                    if forgot and too_many_attempts(uid_):
+                        st.error("Too many wrong attempts. Please ask the Admin to set a temporary password.")
+                    elif has_pw and not (verify_recovery(me, proof) if forgot else check_password(me, proof)):
+                        if forgot:
+                            note_attempt(uid_, False)
+                        st.error("Recovery code is incorrect." if forgot else "Current password is wrong.")
+                    elif pw_problem(new_pw, new_pw2):
+                        st.error(pw_problem(new_pw, new_pw2))
+                    else:
+                        note_attempt(uid_, True)
+                        code = set_password(me, new_pw)
+                        ss.show_code = {"uid": uid_, "code": code}
+                        log_audit(curr_user_name, "CHANGE_PASSWORD", "UserAuth", "Changed own password")
+                        st.toast("Password updated", icon="🔑")
+                        st.rerun()
+    db.status_badge()
     if st.button("🚪 Sign Out", use_container_width=True):
         log_audit(curr_user_name, "LOGOUT", "Auth", "Signed out")
         ss.is_logged_in = False
+        ss.show_code = None
         st.rerun()
 
 # Header banner (re-animates on every page change)
-page_title = nav_choice
+_parts = nav_choice.split(" ", 1)
+_ico, _name = (_parts[0], _parts[1]) if len(_parts) == 2 else ("", nav_choice)
+_role_emoji = {"Admin": "🛡️", "HR": "👥", "Employee": "💼"}[selected_role]
+def _mini_svg(inner):
+    return ('<svg viewBox="0 0 150 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+            '<rect x="1" y="1" width="148" height="62" rx="12" fill="rgba(2,8,20,.45)" stroke="rgba(94,234,212,.25)"/>'
+            + inner + '</svg>')
+
+
+def _avatar(cx, cy, color):
+    return (f'<g class="head"><circle cx="{cx}" cy="{cy}" r="6" fill="{color}"/></g>'
+            f'<path d="M{cx - 10} {cy + 22} q10 -16 20 0z" fill="{color}" opacity=".85"/>')
+
+
+_MINI = {
+    # Admin: control-center — rotating donut + live KPI bars
+    "Admin": (
+        '<g class="m-rot">'
+        '<circle cx="38" cy="32" r="19" fill="none" stroke="#14b8a6" stroke-width="7" pathLength="100" stroke-dasharray="45 55"/>'
+        '<circle cx="38" cy="32" r="19" fill="none" stroke="#8b5cf6" stroke-width="7" pathLength="100" stroke-dasharray="25 75" stroke-dashoffset="-50"/>'
+        '<circle cx="38" cy="32" r="19" fill="none" stroke="#f472b6" stroke-width="7" pathLength="100" stroke-dasharray="14 86" stroke-dashoffset="-80"/>'
+        '</g>'
+        '<circle class="mini-ring" cx="38" cy="32" r="6" fill="none" stroke="#5eead4"/>'
+        '<circle class="pulse-dot" cx="38" cy="32" r="4" fill="#5eead4"/>'
+        '<rect x="78" y="14" width="58" height="6" rx="3" fill="#0f172a"/>'
+        '<rect class="prog" style="animation-duration:5s" x="78" y="14" width="58" height="6" rx="3" fill="#14b8a6"/>'
+        '<rect x="78" y="29" width="58" height="6" rx="3" fill="#0f172a"/>'
+        '<rect class="prog" style="animation-duration:4s;animation-delay:-1s" x="78" y="29" width="58" height="6" rx="3" fill="#8b5cf6"/>'
+        '<rect x="78" y="44" width="58" height="6" rx="3" fill="#0f172a"/>'
+        '<rect class="prog" style="animation-duration:6s;animation-delay:-2s" x="78" y="44" width="58" height="6" rx="3" fill="#f472b6"/>'
+    ),
+    # HR: people network — connected team, document hand-off, approval tick
+    "HR": (
+        '<path class="m-flow" d="M35 32 L68 26" stroke="#5eead4" stroke-width="1.6" fill="none"/>'
+        '<path class="m-flow" d="M82 26 L115 32" stroke="#5eead4" stroke-width="1.6" fill="none"/>'
+        + _avatar(28, 28, "#8b5cf6") + _avatar(75, 20, "#14b8a6") + _avatar(122, 28, "#0ea5e9") +
+        '<circle class="mini-ring" cx="75" cy="20" r="8" fill="none" stroke="#5eead4"/>'
+        '<rect class="m-doc" x="34" y="38" width="8" height="10" rx="1.5" fill="#f8fafc"/>'
+        '<g class="okbadge"><circle cx="134" cy="12" r="8" fill="#10b981"/>'
+        '<path d="M130 12 l3 3 l5 -6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>'
+    ),
+    # Employee: live clock + geofenced check-in pin
+    "Employee": (
+        '<circle cx="34" cy="32" r="21" fill="#0b1220" stroke="#5eead4" stroke-width="2"/>'
+        '<line x1="34" y1="13" x2="34" y2="16" stroke="#94a3b8" stroke-width="1.6"/><line x1="53" y1="32" x2="50" y2="32" stroke="#94a3b8" stroke-width="1.6"/>'
+        '<line x1="34" y1="51" x2="34" y2="48" stroke="#94a3b8" stroke-width="1.6"/><line x1="15" y1="32" x2="18" y2="32" stroke="#94a3b8" stroke-width="1.6"/>'
+        '<line class="hand-h" x1="34" y1="32" x2="34" y2="22" stroke="#e2e8f0" stroke-width="2.4" stroke-linecap="round"/>'
+        '<line class="hand-m" x1="34" y1="32" x2="34" y2="18" stroke="#5eead4" stroke-width="1.8" stroke-linecap="round"/>'
+        '<circle cx="34" cy="32" r="2.2" fill="#5eead4"/>'
+        '<ellipse class="m-geo" cx="100" cy="50" rx="16" ry="5" fill="none" stroke="#5eead4"/>'
+        '<ellipse class="m-geo g2" cx="100" cy="50" rx="16" ry="5" fill="none" stroke="#5eead4"/>'
+        '<g class="m-bounce"><path d="M100 10 a10 10 0 0 1 10 10 c0 9 -10 22 -10 22 s-10 -13 -10 -22 a10 10 0 0 1 10 -10z" fill="#f472b6"/>'
+        '<circle cx="100" cy="20" r="3.6" fill="#0b1220"/></g>'
+        '<g class="okbadge"><circle cx="134" cy="14" r="8" fill="#10b981"/>'
+        '<path d="M130 14 l3 3 l5 -6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>'
+    ),
+}
+MINI_ANIM = ('<div class="mini"><span class="mini-emoji">' + _role_emoji + '</span>'
+             + _mini_svg(_MINI[selected_role]) + '</div>')
 st.markdown(f"""
 <div class="hcm-header">
     <div>
         <div class="crumb">{selected_role} · Workspace</div>
-        <div class="hcm-header-title">{page_title}</div>
+        <div class="hcm-header-title"><span class="ico">{_ico}</span><span class="txt">{_name}</span></div>
         <div class="hcm-header-sub">{ss.company_name} · {today_pkt().strftime('%A, %d %B %Y')}</div>
     </div>
-    <div class="live"><span class="dot"></span> Live</div>
+    <div class="hdr-right">{MINI_ANIM}<div class="live"><span class="dot"></span> Live</div></div>
 </div>""", unsafe_allow_html=True)
 
 import html as _html
@@ -1012,11 +1318,18 @@ def page_user_access():
             st.markdown("##### 🔑 Reset Credentials")
             tgt = st.selectbox("Account to reset", [e["employee_id"] for e in ss.employees],
                                format_func=lambda i: get_emp(i)["name"], key="reset_t")
-            if st.button("Force Password Reset", use_container_width=True):
-                get_emp(tgt)["first_login"] = True
-                log_audit(curr_user_name, "RESET_PASSWORD", "UserAuth", f"Reset for {get_emp(tgt)['name']}")
-                st.toast("Temporary password issued", icon="🔑")
-                st.rerun()
+            tmp_pw = st.text_input("Temporary password", type="password", key="reset_pw")
+            if st.button("Set Temporary Password", use_container_width=True):
+                if len(tmp_pw) < MIN_PW:
+                    st.error(f"Temporary password must be at least {MIN_PW} characters.")
+                else:
+                    t = get_emp(tgt)
+                    t["password_hash"] = hash_password(tmp_pw)
+                    t["recovery_hash"] = None  # old recovery code stops working
+                    t["first_login"] = True
+                    log_audit(curr_user_name, "RESET_PASSWORD", "UserAuth", f"Reset for {t['name']}")
+                    st.toast("Temporary password set — user must change it after login", icon="🔑")
+                    st.rerun()
 
 
 def page_add_employee():
@@ -1076,6 +1389,80 @@ def page_directory():
     st.dataframe(f[cols], use_container_width=True, hide_index=True)
     st.caption(f"{len(f)} of {len(df)} employees shown")
     st.download_button("⬇️ Export CSV", f[cols].to_csv(index=False).encode(), "employees.csv", "text/csv")
+
+    # ---- Edit / Delete (Admin: everyone, HR: regular employees only) ----
+    if selected_role in ("Admin", "HR"):
+        with st.expander("✏️ Edit / 🗑️ Delete Employee"):
+            manageable = [e for e in ss.employees if selected_role == "Admin" or e["role"] == "Employee"]
+            if not manageable:
+                st.info("No employees available to manage.")
+                return
+            pick = st.selectbox("Select employee", [e["employee_id"] for e in manageable],
+                                format_func=lambda i: f"{i} — {get_emp(i)['name']}", key="mg_pick")
+            emp_ = get_emp(pick)
+
+            st.markdown("##### ✏️ Edit Details")
+            dept_opts = ss.departments if emp_["department"] in ss.departments else [emp_["department"]] + ss.departments
+            desig_opts = ss.designations if emp_["designation"] in ss.designations else [emp_["designation"]] + ss.designations
+            role_opts = ["Employee", "HR", "Admin"]
+            with st.form(f"edit_emp_{pick}"):
+                c1, c2 = st.columns(2)
+                e_name = c1.text_input("Full Name", emp_["name"])
+                e_email = c2.text_input("Work Email", emp_["email"])
+                c3, c4 = st.columns(2)
+                e_dept = c3.selectbox("Department", dept_opts, index=dept_opts.index(emp_["department"]))
+                e_desig = c4.selectbox("Designation", desig_opts, index=desig_opts.index(emp_["designation"]))
+                c5, c6 = st.columns(2)
+                e_sal = c5.number_input("Monthly Basic Salary (PKR)", min_value=1, value=int(emp_["basic_salary"]), step=5000)
+                if selected_role == "Admin":
+                    e_role = c6.selectbox("System Role", role_opts, index=role_opts.index(emp_["role"]))
+                else:
+                    e_role = emp_["role"]
+                    c6.text_input("System Role", emp_["role"], disabled=True)
+                c7, c8 = st.columns(2)
+                e_phone = c7.text_input("Phone", emp_["phone"] or "")
+                e_addr = c8.text_input("Address", emp_["address"] or "")
+
+                if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
+                    other_emails = {x["email"].lower() for x in ss.employees if x["employee_id"] != pick}
+                    admins = [x for x in ss.employees if x["role"] == "Admin"]
+                    if not e_name.strip() or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e_email.strip()):
+                        st.error("Please enter a valid name and email.")
+                    elif e_email.strip().lower() in other_emails:
+                        st.error("Another employee already uses this email.")
+                    elif emp_["role"] == "Admin" and e_role != "Admin" and len(admins) == 1:
+                        st.error("This is the only Admin — you cannot change its role.")
+                    else:
+                        old_name = emp_["name"]
+                        emp_.update(name=e_name.strip(), email=e_email.strip(), department=e_dept,
+                                    designation=e_desig, basic_salary=e_sal, role=e_role,
+                                    phone=e_phone, address=e_addr)
+                        if e_name.strip() != old_name:  # keep copies of the name in other tables in sync
+                            for a in ss.attendance:
+                                if a["employee_id"] == pick:
+                                    a["name"] = e_name.strip()
+                            for l in ss.leaves:
+                                if l["employee_id"] == pick:
+                                    l["employee_name"] = e_name.strip()
+                        log_audit(curr_user_name, "UPDATE_EMPLOYEE", "Employee", f"Edited {pick} ({old_name} → {e_name.strip()})")
+                        st.toast("Employee updated", icon="✅")
+                        st.rerun()
+
+            st.markdown("##### 🗑️ Delete Employee")
+            if pick == ss.current_user_id:
+                st.warning("You cannot delete your own account.")
+            elif emp_["role"] == "Admin" and sum(1 for x in ss.employees if x["role"] == "Admin") == 1:
+                st.warning("This is the only Admin account and cannot be deleted.")
+            else:
+                st.caption("Deleting also removes this employee's attendance and leave records. This cannot be undone.")
+                ok = st.checkbox(f"Yes, permanently delete {emp_['name']} ({pick})", key=f"del_ok_{pick}")
+                if st.button("🗑️ Delete Employee", disabled=not ok, key=f"del_btn_{pick}"):
+                    ss.employees = [x for x in ss.employees if x["employee_id"] != pick]
+                    ss.attendance = [x for x in ss.attendance if x["employee_id"] != pick]
+                    ss.leaves = [x for x in ss.leaves if x["employee_id"] != pick]
+                    log_audit(curr_user_name, "DELETE_EMPLOYEE", "Employee", f"Deleted {emp_['name']} ({pick})")
+                    st.toast(f"{emp_['name']} deleted", icon="🗑️")
+                    st.rerun()
 
 
 def page_csv_import():
@@ -1195,7 +1582,7 @@ def page_attendance(own_only=False):
                 limit = datetime.datetime.combine(today, ss.office_start) + datetime.timedelta(minutes=int(ss.grace_minutes))
                 status = "Late" if now > limit else "Present"
                 ss.attendance.append(dict(
-                    id=f"ATT-{len(ss.attendance) + 1:03d}", date=today_iso, employee_id=uid, name=curr_user_name,
+                    id=f"ATT-{next_num(ss.attendance, 'id', 'ATT-'):03d}", date=today_iso, employee_id=uid, name=curr_user_name,
                     check_in=now.strftime("%H:%M"), check_out="-", status=status, hours=0.0,
                     method=method, dist_m=dist))
                 log_audit(curr_user_name, "CHECK_IN", "Attendance", f"{status} via {method}, {dist} m")
@@ -1262,7 +1649,7 @@ def page_leaves(own_only=False):
                         st.error(f"Quota exceeded: {used} used + {days} requested > {ss.leave_quotas[ltype]}.")
                     else:
                         ss.leaves.append(dict(
-                            leave_id=f"LV-{101 + len(ss.leaves)}", employee_id=uid, employee_name=curr_user_name,
+                            leave_id=f"LV-{next_num(ss.leaves, 'leave_id', 'LV-', 100)}", employee_id=uid, employee_name=curr_user_name,
                             leave_type=ltype, start_date=s.isoformat(), end_date=e.isoformat(),
                             working_days=days, reason=reason, status="Pending",
                             applied_at=today_pkt().isoformat(), hr_comment=""))
@@ -1402,7 +1789,7 @@ def page_announcements():
         body = st.text_area("Content")
         if st.form_submit_button("📢 Publish", type="primary", use_container_width=True):
             if t.strip() and body.strip():
-                ss.announcements.insert(0, dict(id=len(ss.announcements) + 1, title=t,
+                ss.announcements.insert(0, dict(id=max([x["id"] for x in ss.announcements], default=0) + 1, title=t,
                                                 date=today_pkt().isoformat(),
                                                 author=curr_user_name, content=body))
                 log_audit(curr_user_name, "ANNOUNCE", "Announcement", t)
@@ -1410,8 +1797,13 @@ def page_announcements():
                 st.rerun()
             else:
                 st.error("Title and content are required.")
-    for a in ss.announcements:
+    for a in list(ss.announcements):
         st.info(f"**{a['title']}** ({a['date']}) — *{a['author']}*\n\n{a['content']}")
+        if st.button("🗑️ Delete", key=f"del_ann_{a['id']}"):
+            ss.announcements = [x for x in ss.announcements if x["id"] != a["id"]]
+            log_audit(curr_user_name, "DELETE_ANNOUNCEMENT", "Announcement", a["title"])
+            st.toast("Announcement deleted", icon="🗑️")
+            st.rerun()
 
 
 def page_audit():
@@ -1464,3 +1856,5 @@ ROUTES = {
 }
 
 ROUTES[nav_choice]()
+
+db.sync()
