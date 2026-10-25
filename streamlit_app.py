@@ -815,57 +815,215 @@ def compute_payroll_row(e, month):
                 unpaid_days=unpaid_days, unpaid_deduction=unpaid_ded, tax=tax, net=net)
 
 
-def ai_reply(prompt, role, uid):
-    """Gemini if key present, else rule-based assistant scoped by role."""
-    today = today_pkt().isoformat()
+def _secret(name, default=""):
+    """Read a setting from environment variables first, then Streamlit secrets."""
+    v = os.environ.get(name)
+    if v:
+        return v.strip()
+    try:
+        return str(st.secrets[name]).strip()
+    except Exception:
+        return default
+
+
+def _gemini_key():
+    return _secret("GEMINI_API_KEY")
+
+
+def _leave_balance(uid):
+    """Per leave type: quota, approved days used, pending days and days left (from the live data)."""
+    out = {}
+    for k in ("annual", "sick", "casual"):
+        used = sum(l["working_days"] for l in ss.leaves
+                   if l["employee_id"] == uid and l["leave_type"] == k and l["status"] == "Approved")
+        pend = sum(l["working_days"] for l in ss.leaves
+                   if l["employee_id"] == uid and l["leave_type"] == k and l["status"] == "Pending")
+        quota = ss.leave_quotas.get(k, 0)
+        out[k] = dict(quota=quota, used=used, pending=pend, left=quota - used)
+    return out
+
+
+def _find_employee(q):
+    """Employee mentioned by (part of) name in the lower-cased question, or None."""
+    best, best_score = None, 0
+    for e in ss.employees:
+        full = e["name"].lower()
+        if full in q:
+            return e
+        parts = [p for p in re.findall(r"[a-z]+", full) if len(p) >= 4]
+        score = sum(1 for p in parts if re.search(rf"\b{re.escape(p)}\b", q))
+        if score > best_score:
+            best, best_score = e, score
+    return best
+
+
+def _ai_context(role, uid):
+    """Everything the assistant may use. Employees only get their own records; passwords never included."""
     me = get_emp(uid)
-    key = os.environ.get("GEMINI_API_KEY")
-
+    ctx = {
+        "today": today_pkt().isoformat(),
+        "company": ss.company_name,
+        "asking_user": dict(_public(me), leave_balance=_leave_balance(uid)),
+        "leave_quotas": ss.leave_quotas,
+        "office_start": str(ss.office_start)[:5],
+        "grace_minutes": ss.grace_minutes,
+        "announcements": ss.announcements[:5],
+    }
     if role == "Employee":
-        scope = {"employee": _public(me),
-                 "attendance": [a for a in ss.attendance if a["employee_id"] == uid],
-                 "leaves": [l for l in ss.leaves if l["employee_id"] == uid]}
+        ctx["my_attendance"] = [a for a in ss.attendance if a["employee_id"] == uid][-60:]
+        ctx["my_leaves"] = [l for l in ss.leaves if l["employee_id"] == uid]
     else:
-        scope = {"employees": [_public(e) for e in ss.employees], "attendance": ss.attendance, "leaves": ss.leaves}
+        ctx["employees"] = [dict(_public(e), leave_balance=_leave_balance(e["employee_id"])) for e in ss.employees]
+        ctx["attendance"] = ss.attendance[-300:]
+        ctx["leaves"] = ss.leaves
+    return ctx
 
-    if key:
+
+def _ask_gemini(prompt, role, uid, key):
+    data = json.dumps(_ai_context(role, uid), default=str)
+    system = (f"You are the HR assistant of {ss.company_name}. The person asking has the role '{role}'. "
+              "The words I, me and my refer to 'asking_user' in the DATA. Answer ONLY from the DATA, in short "
+              "clear sentences (markdown allowed). If the answer is not in the DATA, say you do not have that "
+              "information. If the role is Employee, discuss only that person's own records.")
+    body = json.dumps({"contents": [{"parts": [{"text": f"{system}\n\nDATA:\n{data}\n\nQUESTION: {prompt}"}]}]}).encode()
+    last = None
+    for model in dict.fromkeys([_secret("GEMINI_MODEL") or "gemini-3.8-flash", "gemini-3.5-flash-lite"]):
         try:
-            body = json.dumps({"contents": [{"parts": [{"text":
-                f"You are an HR assistant for {ss.company_name}. Role of user: {role}. "
-                f"Answer briefly using ONLY this data:\n{json.dumps(scope, default=str)}\n\nQuestion: {prompt}"}]}]}).encode()
             req = urllib.request.Request(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}",
-                data=body, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=15) as r:
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                data=body, headers={"Content-Type": "application/json", "x-goog-api-key": key})
+            with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read())["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as ex:  # fall through to rules
-            st.toast(f"Gemini unavailable ({type(ex).__name__}); using built-in assistant", icon="⚠️")
+        except Exception as ex:
+            last = ex
+    raise last
 
+
+def _rule_reply(prompt, role, uid):
+    """Built-in assistant: answers from the live data (Supabase-backed session) with no API key."""
     q = prompt.lower()
-    if role == "Employee":
-        used = sum(l["working_days"] for l in scope["leaves"] if l["status"] == "Approved")
-        late = sum(1 for a in scope["attendance"] if a["status"] == "Late")
-        if "leave" in q:
-            return f"You have used **{used}** approved leave day(s). Annual quota: {ss.leave_quotas['annual']}."
-        if "late" in q or "attend" in q:
-            return f"You have **{len(scope['attendance'])}** attendance record(s), **{late}** late arrival(s)."
-        return "Ask me about your attendance, late arrivals, or leave balance."
+    me = get_emp(uid)
+    staff = role in ("Admin", "HR")
+    today = today_pkt().isoformat()
+    month = today_pkt().strftime("%Y-%m")
+    named = _find_employee(q)
+    personal = bool(re.search(r"\b(my|me|mine|myself|i)\b", q))
 
+    if named and named["employee_id"] != uid and not staff:
+        return "I can only share your own records. Try: *my leave balance*, *my attendance* or *my salary*."
+    subj = named if (named and staff) else me
+    is_me = subj["employee_id"] == uid
+    who = "You" if is_me else f"**{subj['name']}**"
+    owner = "you" if is_me else f"**{subj['name']}**"
+    have = "have" if is_me else "has"
+    sid = subj["employee_id"]
+
+    if re.fullmatch(r"\W*(hi|hello|hey|salam|assalam[\w\- ]*)\W*", q):
+        return f"Hello {me['name'].split()[0]}! 👋 Ask me about leave, attendance, payroll or employees."
+
+    # ---- employee profile ----
+    if named and staff and re.search(r"who is|email|mail|department|designation|title|phone|contact|joined|joining|details|about|info", q) \
+            and not re.search(r"leave|late|attend|salary|pay", q):
+        e = named
+        return (f"**{e['name']}** ({e['employee_id']})\n"
+                f"- Role: {e['role']} · {e['designation']}\n- Department: {e['department']}\n"
+                f"- Email: {e['email']}\n- Phone: {e['phone']}\n- Joined: {e['joining_date']}\n"
+                f"- Status: {e['status']}\n- Basic salary: PKR {e['basic_salary']:,.0f}")
+
+    # ---- leave ----
+    lt = next((k for k in ("annual", "sick", "casual", "unpaid") if k in q), None)
+    if "leave" in q or lt:
+        if re.search(r"\b(pending|approval|approvals|inbox|requests?)\b", q):
+            pend = [l for l in ss.leaves if l["status"] == "Pending" and (staff or l["employee_id"] == uid)]
+            if not pend:
+                return "No pending leave requests. ✅"
+            lines = "\n".join(f"- **{l['employee_name']}** · {l['leave_type'].title()} · "
+                              f"{l['start_date']} → {l['end_date']} ({l['working_days']} day(s))" for l in pend)
+            return f"**{len(pend)}** pending leave request(s):\n\n{lines}"
+        if staff and not personal and not named and re.search(r"\bon leave\b|\bwho\b", q):
+            away = [l for l in ss.leaves if l["status"] == "Approved" and l["start_date"] <= today <= l["end_date"]]
+            return ("On leave today: " + ", ".join(f"**{l['employee_name']}** ({l['leave_type']})" for l in away)) \
+                if away else "Nobody is on approved leave today."
+        if lt == "unpaid":
+            used = sum(l["working_days"] for l in ss.leaves
+                       if l["employee_id"] == sid and l["leave_type"] == "unpaid" and l["status"] == "Approved")
+            return f"{who} {have} taken **{used}** approved unpaid leave day(s). Unpaid leave has no fixed quota."
+        bal = _leave_balance(sid)
+        if lt:
+            b = bal[lt]
+            extra = f", plus {b['pending']} day(s) pending approval" if b["pending"] else ""
+            return f"{who} {have} **{b['left']}** {lt} leave day(s) left (used {b['used']} of {b['quota']}{extra})."
+        lines = "\n".join(f"- {k.title()}: **{b['left']}** left (used {b['used']} of {b['quota']})" for k, b in bal.items())
+        return f"Leave balance for {owner}:\n\n{lines}"
+
+    # ---- late arrivals ----
     if "late" in q:
+        if personal or named or not staff:
+            recs = [a for a in ss.attendance if a["employee_id"] == sid and a["status"] == "Late"]
+            latest = ", ".join(sorted(a["date"] for a in recs)[-5:])
+            return f"{who} {have} **{len(recs)}** late arrival(s)" + (f" (latest: {latest})." if recs else ".")
         names = [a["name"] for a in ss.attendance if a["date"] == today and a["status"] == "Late"]
         return "Late today: " + (", ".join(names) if names else "nobody 🎉")
-    if "present" in q or "attend" in q:
-        n = sum(1 for a in ss.attendance if a["date"] == today)
-        return f"**{n}** of **{len(ss.employees)}** employees have checked in today."
-    if "pending" in q or "leave" in q:
-        n = sum(1 for l in ss.leaves if l["status"] == "Pending")
-        return f"There are **{n}** pending leave request(s)."
-    if "headcount" in q or "employee" in q:
-        return f"Total workforce: **{len(ss.employees)}** across {len(ss.departments)} departments."
-    if "payroll" in q or "salary" in q:
-        total = sum(e["basic_salary"] for e in ss.employees)
-        return f"Total monthly basic payroll: **PKR {total:,.0f}**."
-    return "Try: *who is late today?*, *pending leaves*, *headcount*, *payroll total*."
+
+    # ---- attendance ----
+    if re.search(r"attend|present|absent|check(ed)?[ -]?in|punch", q):
+        if personal or named or not staff:
+            recs = sorted([a for a in ss.attendance if a["employee_id"] == sid], key=lambda a: a["date"])
+            if not recs:
+                return f"No attendance records found for {owner}."
+            t = next((a for a in recs if a["date"] == today), None)
+            line = f"Today: checked in at **{t['check_in']}** ({t['status']})" if t else "No check-in recorded today"
+            return f"{line}. Records: **{len(recs)}**, late arrivals: **{sum(1 for a in recs if a['status'] == 'Late')}**."
+        checked = {a["employee_id"] for a in ss.attendance if a["date"] == today}
+        away = {l["employee_id"] for l in ss.leaves if l["status"] == "Approved" and l["start_date"] <= today <= l["end_date"]}
+        waiting = [e["name"] for e in ss.employees
+                   if e["status"] == "Active" and e["employee_id"] not in checked and e["employee_id"] not in away]
+        msg = f"**{len(checked)}** of **{len(ss.employees)}** employees have checked in today."
+        return msg + (f"\n\nNot checked in yet: {', '.join(waiting)}" if waiting else "")
+
+    # ---- salary / payroll ----
+    if re.search(r"salary|payroll|payslip|\bpay\b|wage|\btax\b|deduction", q):
+        if personal or named or not staff:
+            r = compute_payroll_row(subj, month)
+            who_pos = "Your" if is_me else f"**{subj['name']}**'s"
+            return (f"{who_pos} pay for {month}: basic **PKR {r['basic']:,.0f}**, gross PKR {r['gross']:,.0f}, "
+                    f"deductions PKR {r['gross'] - r['net']:,.0f}, **net PKR {r['net']:,.0f}** "
+                    "(estimate until payroll is finalized).")
+        rows = [compute_payroll_row(e, month) for e in ss.employees if e["status"] == "Active"]
+        return (f"Payroll for {month} ({len(rows)} active employees): basic **PKR {sum(r['basic'] for r in rows):,.0f}**, "
+                f"gross PKR {sum(r['gross'] for r in rows):,.0f}, net payout **PKR {sum(r['net'] for r in rows):,.0f}**.")
+
+    # ---- headcount ----
+    if re.search(r"headcount|employees|staff|workforce|team|department|how many people", q):
+        if not staff:
+            return "Company-wide numbers are available to HR and Admin. I can answer about your own records."
+        by = {}
+        for e in ss.employees:
+            by[e["department"]] = by.get(e["department"], 0) + 1
+        lines = "\n".join(f"- {d}: **{n}**" for d, n in sorted(by.items()))
+        return f"Total workforce: **{len(ss.employees)}** employees.\n\n{lines}"
+
+    # ---- announcements ----
+    if re.search(r"announce|news|notice", q):
+        if not ss.announcements:
+            return "There are no announcements yet."
+        return "Latest announcements:\n\n" + "\n".join(f"- **{a['title']}** ({a['date']})" for a in ss.announcements[:3])
+
+    if staff:
+        return ("I can help with: *my leave balance*, *sick leave left for Bilal*, *pending leaves*, *who is late today?*, "
+                "*who is on leave today?*, *attendance today*, *headcount*, *payroll total*, *email of Fatima*.")
+    return "I can help with: *my leave balance*, *my attendance*, *my late arrivals*, *my salary*, *announcements*."
+
+
+def ai_reply(prompt, role, uid):
+    """Gemini when a key is set (env var or Streamlit secret), otherwise the built-in data-aware assistant."""
+    key = _gemini_key()
+    if key:
+        try:
+            return _ask_gemini(prompt, role, uid, key)
+        except Exception as ex:  # fall back to the built-in assistant
+            st.toast(f"Gemini unavailable ({type(ex).__name__}); using built-in assistant", icon="⚠️")
+    return _rule_reply(prompt, role, uid)
 
 
 # =====================================================================
@@ -1923,7 +2081,7 @@ def page_audit():
 def page_ai():
     scope = "your own records only" if selected_role == "Employee" else "company-wide data"
     st.caption(f"Assistant scope: **{scope}**. "
-               f"{'Gemini connected.' if os.environ.get('GEMINI_API_KEY') else 'Built-in assistant active (set GEMINI_API_KEY for Gemini).'}")
+               f"{'Gemini connected.' if _gemini_key() else 'Built-in smart assistant active (add GEMINI_API_KEY in Secrets for Gemini).'}")
     if not ss.chat_history:
         ss.chat_history.append(("assistant", f"Hi {curr_user_name.split()[0]}! 👋 How can I help today?"))
     for role, msg in ss.chat_history:
