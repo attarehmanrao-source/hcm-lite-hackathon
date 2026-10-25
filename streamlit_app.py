@@ -8,12 +8,14 @@ Optional AI: set env var GEMINI_API_KEY for Gemini replies
              (otherwise a built-in rule-based assistant answers).
 """
 
+import base64
 import datetime
 import hashlib
 import hmac
 import json
 import math
 import os
+import pathlib
 import re
 import secrets
 import urllib.request
@@ -467,10 +469,101 @@ h3, h5 { letter-spacing: -0.01em; }
     .hand-m { animation-duration: 12s !important; }
     .hand-h { animation-duration: 144s !important; }
 }
+/* ===== Gratitude tribute card (login page) ===== */
+@keyframes tribFloat { 0%,100% { transform: translateY(0) rotate(-6deg); } 50% { transform: translateY(-7px) rotate(6deg); } }
+@keyframes tribGlow {
+    0%   { box-shadow: 0 0 18px rgba(252,211,77,.14), 0 10px 30px rgba(0,0,0,.35); }
+    100% { box-shadow: 0 0 40px rgba(244,114,182,.30), 0 10px 30px rgba(0,0,0,.35); }
+}
+@keyframes tribStar { 0%,100% { opacity: .2; transform: scale(.6); } 50% { opacity: 1; transform: scale(1.25); } }
+@keyframes tribHeart { 0%,100% { transform: scale(1); } 20% { transform: scale(1.28); } 40% { transform: scale(1); } 60% { transform: scale(1.18); } }
+.hcm-tribute { position: relative; width: min(500px, 100%); margin: 18px auto 0; padding: 20px 24px 18px; border-radius: 20px;
+               text-align: center; overflow: hidden; backdrop-filter: blur(8px);
+               background: linear-gradient(135deg, rgba(252,211,77,.10), rgba(244,114,182,.08) 55%, rgba(139,92,246,.10));
+               border: 1px solid rgba(252,211,77,.38); animation: tribGlow 4s ease-in-out infinite alternate; }
+.hcm-tribute::after { content: ""; position: absolute; top: 0; left: 0; width: 35%; height: 100%; pointer-events: none;
+                      background: linear-gradient(90deg, transparent, rgba(252,211,77,.14), transparent); animation: sweep 7s ease-in-out infinite; }
+.trib-ico { display: flex; justify-content: center; align-items: center; gap: 14px; font-size: 1.7rem; margin-bottom: 6px; }
+.trib-ico span { display: inline-block; animation: tribFloat 3.4s ease-in-out infinite; }
+.trib-ico span:nth-child(2) { animation: tribHeart 1.8s ease-in-out infinite; }
+.trib-ico span:nth-child(3) { animation-delay: -1.7s; }
+.trib-label { font-size: .64rem; letter-spacing: .42em; text-transform: uppercase; color: #fcd34d; font-weight: 700; margin-bottom: 10px; }
+.trib-text { font-family: 'Poppins', 'Inter', sans-serif; font-size: 1.02rem; line-height: 1.75; font-weight: 500; color: #e2e8f0; position: relative; z-index: 1; }
+.trib-name { font-weight: 700; background: linear-gradient(90deg, #fcd34d, #f472b6, #fcd34d); background-size: 200% auto;
+             -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: hcmShine 4s linear infinite; }
+.trib-line { height: 2px; width: 70px; margin: 12px auto 10px; border-radius: 2px; background: linear-gradient(90deg, #fcd34d, #f472b6); }
+.trib-thanks { font-family: 'Poppins', 'Inter', sans-serif; font-size: 1.05rem; font-weight: 600; letter-spacing: .06em;
+               background: linear-gradient(90deg, #5eead4, #67e8f9, #a5b4fc, #5eead4); background-size: 200% auto;
+               -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: hcmShine 5s linear infinite; }
+.trib-star { position: absolute; font-size: 13px; animation: tribStar 2.6s ease-in-out infinite; }
+.trib-star.t1 { top: 10px; left: 16px; } .trib-star.t2 { top: 14px; right: 18px; animation-delay: -.9s; }
+.trib-star.t3 { bottom: 12px; left: 22px; animation-delay: -1.7s; } .trib-star.t4 { bottom: 10px; right: 16px; animation-delay: -.4s; }
+
+/* ===== Login page: single-column professional layout ===== */
+.dev-strip { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 4px;
+             padding: 7px 18px; border-radius: 999px; background: rgba(14,22,38,.6); border: 1px solid rgba(94,234,212,.25);
+             backdrop-filter: blur(6px); }
+.dev-lbl { font-size: .62rem; letter-spacing: .3em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.dev-name { font-family: 'Poppins', 'Inter', sans-serif; font-size: .98rem; font-weight: 600; color: #f1f5f9; }
+.dev-roll { font-size: .68rem; letter-spacing: .16em; color: #a5f3fc; padding: 3px 11px; border-radius: 999px;
+            border: 1px solid rgba(103,232,249,.35); background: rgba(6,182,212,.08); }
+
+/* Gratitude cover label: full-width banner at the very bottom */
+.cover-label { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 26px;
+               max-width: 920px; margin: 28px auto 14px; padding: 26px 32px 30px; border-radius: 20px; text-align: center;
+               background: linear-gradient(120deg, rgba(252,211,77,.12), rgba(244,114,182,.10) 50%, rgba(139,92,246,.12));
+               border: 1px solid rgba(252,211,77,.4); backdrop-filter: blur(8px); animation: tribGlow 4s ease-in-out infinite alternate; }
+.cover-label::after { content: ""; position: absolute; top: 0; left: 0; width: 30%; height: 100%; pointer-events: none;
+                      background: linear-gradient(90deg, transparent, rgba(252,211,77,.14), transparent); animation: sweep 7s ease-in-out infinite; }
+.cv-body { position: relative; z-index: 1; flex: 1; max-width: 640px; }
+.cv-ico { position: relative; z-index: 1; font-size: 2.5rem; line-height: 1; animation: tribFloat 3.4s ease-in-out infinite; }
+.cv-ico.r { animation-name: tribHeart; animation-duration: 1.8s; }
+.cv-bar { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px;
+          background: linear-gradient(90deg, #fcd34d, #f472b6, #8b5cf6, #14b8a6, #fcd34d); background-size: 300% 100%;
+          animation: gradShift 5s linear infinite; }
+.cv-star { position: absolute; font-size: 13px; animation: tribStar 2.6s ease-in-out infinite; }
+.cv-star.c1 { top: 10px; left: 16px; } .cv-star.c2 { top: 12px; right: 18px; animation-delay: -.9s; }
+.cv-star.c3 { bottom: 14px; left: 22px; animation-delay: -1.7s; } .cv-star.c4 { bottom: 14px; right: 16px; animation-delay: -.4s; }
+@media (max-width: 700px) { .cv-ico { display: none; } .cover-label { padding: 22px 18px 26px; } }
 </style>
 <div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div>
 """
 st.markdown(CSS, unsafe_allow_html=True)
+
+
+# ---- Custom background picture (background.jpg must sit next to this file) ----
+@st.cache_data(show_spinner=False)
+def _bg_b64(path):
+    try:
+        return base64.b64encode((pathlib.Path(__file__).parent / path).read_bytes()).decode()
+    except Exception:
+        return ""
+
+
+def set_background(path="background.jpg", dim=0.78):
+    data = _bg_b64(path)
+    if not data:  # file missing -> app keeps working with the default design
+        return
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background-image:
+                linear-gradient(rgba(7,11,20,{dim}), rgba(7,11,20,{dim})),
+                url("data:image/jpeg;base64,{data}") !important;
+            background-size: cover !important;
+            background-position: center !important;
+            background-repeat: no-repeat !important;
+            background-attachment: fixed !important;
+            animation: none !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+set_background()
 
 import random as _rnd
 _r = _rnd.Random(7)  # seeded so particles don't jump on rerun
@@ -959,35 +1052,27 @@ def role_login_panel(role, title, caption):
 
 
 def render_login():
-    left, mid = st.columns([1.15, 1], gap="large")
-    with left:
-        st.markdown("""
-        <div class="hero">
-            <div class="hcm-orb">
-                <div class="hcm-ring"></div><div class="hcm-ring r2"></div><div class="hcm-orbit"></div>
-                <span class="hcm-spark s1">✨</span><span class="hcm-spark s2">💫</span>
-                <div class="hcm-core"><div class="hcm-emoji">👥</div><div class="hcm-abbr">HCM</div></div>
-            </div>
-            <h1 class="anim-title">HCM Lite</h1>
-            <div class="hcm-full fade-up d1"><span class="ico">🏢</span><span class="txt">Human Capital Management</span></div>
-            <div class="sub-title fade-up d2">✨ AI-Assisted workforce platform for modern teams</div>
-            <div class="hcm-dev fade-up d3">
-                <div class="hcm-dev-label">Developed by</div>
-                <div class="hcm-dev-name">M Atta ur Rehman Khan</div>
-                <div class="hcm-dev-line"></div>
-                <div class="hcm-dev-roll">ROLL NO &nbsp;777760</div>
-            </div>
-            <p class="muted-text fade-up d4">Select your role to enter. Each role has its own menus,
-            permissions and AI assistant scope.</p>
-            <div class="chips">
-                <span class="chip">📍 Geofenced Attendance</span>
-                <span class="chip">🏖️ Leave Workflow</span>
-                <span class="chip">💰 Smart Payroll</span>
-                <span class="chip">🤖 AI Assistant</span>
-            </div>
-        </div>""", unsafe_allow_html=True)
+    # ---- 1) Page title (top) ----
+    st.markdown("""
+    <div class="hero">
+        <div class="hcm-orb">
+            <div class="hcm-ring"></div><div class="hcm-ring r2"></div><div class="hcm-orbit"></div>
+            <span class="hcm-spark s1">✨</span><span class="hcm-spark s2">💫</span>
+            <div class="hcm-core"><div class="hcm-emoji">👥</div><div class="hcm-abbr">HCM</div></div>
+        </div>
+        <h1 class="anim-title">HCM Lite</h1>
+        <div class="hcm-full fade-up d1"><span class="ico">🏢</span><span class="txt">Human Capital Management</span></div>
+        <div class="sub-title fade-up d2">✨ AI-Assisted workforce platform for modern teams</div>
+        <div class="dev-strip fade-up d3">
+            <span class="dev-lbl">Developed by</span>
+            <span class="dev-name">M Atta ur Rehman Khan</span>
+            <span class="dev-roll">ROLL NO 777760</span>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ---- 2) Role slider (Admin / HR / Employee) + sign-in, centered ----
+    _, mid, _ = st.columns([1, 1.6, 1])
     with mid:
-        st.markdown('<div style="height:3rem"></div>', unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="login-marker"></div>', unsafe_allow_html=True)
             ROLE_OPTS = ["🛡️ Admin", "👥 HR", "💼 Employee"]
@@ -1004,13 +1089,33 @@ def render_login():
                 role_login_panel("Employee", "💼 Employee Self-Service Login",
                                  "Check in/out, apply for leave, view payslips and chat with your AI assistant.")
 
-    # Wide animated scene spanning the full width under both columns
+    # ---- 3) Animated office scene ----
     _today = today_pkt()
     st.markdown(OFFICE_SCENE.replace("__MON__", _today.strftime("%b").upper())
                             .replace("__DAY__", str(_today.day)), unsafe_allow_html=True)
     st.markdown('<div class="scene-caption"><b>Attendance</b> &nbsp;·&nbsp; <b>Leave</b> &nbsp;·&nbsp; '
                 '<b>Payroll</b> &nbsp;·&nbsp; <b>AI</b> — one platform for your whole team</div>',
                 unsafe_allow_html=True)
+
+    # ---- 4) Gratitude cover label (very bottom) ----
+    st.markdown("""
+    <div class="cover-label fade-up d5">
+        <span class="cv-star c1">✨</span><span class="cv-star c2">⭐</span>
+        <span class="cv-star c3">⭐</span><span class="cv-star c4">✨</span>
+        <div class="cv-ico l">🎓</div>
+        <div class="cv-body">
+            <div class="trib-label">With Gratitude</div>
+            <div class="trib-text">
+                Wherever I stand today, it is the result of the dedication of my teacher,
+                <span class="trib-name">Sir Azeem</span>, and the hard work of the institute,
+                <span class="trib-name">SMIT</span>.
+            </div>
+            <div class="trib-line"></div>
+            <div class="trib-thanks">Thank You 🙏</div>
+        </div>
+        <div class="cv-ico r">❤️</div>
+        <div class="cv-bar"></div>
+    </div>""", unsafe_allow_html=True)
 
 if not ss.is_logged_in:
     render_login()
