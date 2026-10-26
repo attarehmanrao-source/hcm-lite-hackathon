@@ -23,6 +23,7 @@ import urllib.request
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import db  # Supabase backend (db.py must sit in the same folder)
 
@@ -1209,7 +1210,83 @@ def role_login_panel(role, title, caption):
                             st.rerun()
 
 
+def hanging_bulb(show=True):
+    """Hanging bulb on the login page. Touch it to switch the light on/off.
+    show=False removes the bulb (used after login)."""
+    code = """
+    <script>
+    (function () {
+      const SHOW = __SHOW__;
+      const doc = window.parent.document;
+
+      // ---- remove everything (after login) ----
+      if (!SHOW) {
+        ['bulb-wrap', 'dark-veil', 'bulb-glow', 'bulb-hint', 'bulb-style'].forEach(function (id) {
+          const el = doc.getElementById(id);
+          if (el) el.remove();
+        });
+        doc.body.classList.remove('lights-on');
+        return;
+      }
+
+      if (doc.getElementById('bulb-wrap')) return;  // already added
+
+      const style = doc.createElement('style');
+      style.id = 'bulb-style';
+      style.innerHTML = `
+        #dark-veil{position:fixed;inset:0;background:rgba(0,0,0,.72);
+          pointer-events:none;z-index:999990;transition:opacity .8s ease;}
+        body.lights-on #dark-veil{opacity:0;}
+
+        #bulb-glow{position:fixed;inset:0;pointer-events:none;z-index:999991;opacity:0;
+          transition:opacity .8s ease;
+          background:radial-gradient(circle at calc(100% - 63px) 140px,
+            rgba(255,214,102,.40), rgba(255,214,102,.12) 35%, transparent 65%);}
+        body.lights-on #bulb-glow{opacity:1;}
+
+        #bulb-wrap{position:fixed;top:0;right:40px;z-index:999999;
+          display:flex;flex-direction:column;align-items:center;
+          cursor:pointer;transform-origin:top center;
+          animation:bulbSwing 3s ease-in-out infinite;}
+        #bulb-wrap:hover{filter:brightness(1.25);}
+        @keyframes bulbSwing{0%,100%{transform:rotate(4deg)}50%{transform:rotate(-4deg)}}
+        #bulb-wrap .wire{width:3px;height:90px;background:#aaa;}
+        #bulb-wrap .socket{width:22px;height:18px;background:#555;border-radius:4px 4px 0 0;}
+        #bulb-wrap .glass{width:46px;height:56px;background:#8a8a6a;
+          border-radius:50% 50% 45% 45%;transition:all .5s;}
+        body.lights-on #bulb-wrap .glass{background:#ffe066;
+          box-shadow:0 0 25px 10px #ffd84d,0 0 80px 40px rgba(255,216,77,.5);}
+
+        #bulb-hint{position:fixed;top:190px;right:14px;z-index:999999;
+          color:#cbd5e1;font-size:12px;font-family:sans-serif;
+          background:rgba(15,23,42,.8);padding:4px 10px;border-radius:999px;
+          border:1px solid rgba(255,255,255,.2);pointer-events:none;
+          transition:opacity .5s;}
+        body.lights-on #bulb-hint{opacity:0;}
+      `;
+      doc.head.appendChild(style);
+
+      const veil = doc.createElement('div'); veil.id = 'dark-veil'; doc.body.appendChild(veil);
+      const glow = doc.createElement('div'); glow.id = 'bulb-glow'; doc.body.appendChild(glow);
+
+      const hint = doc.createElement('div'); hint.id = 'bulb-hint';
+      hint.textContent = '💡 Touch the bulb';
+      doc.body.appendChild(hint);
+
+      const wrap = doc.createElement('div');
+      wrap.id = 'bulb-wrap';
+      wrap.innerHTML = '<div class="wire"></div><div class="socket"></div><div class="glass"></div>';
+      wrap.addEventListener('click', function () { doc.body.classList.toggle('lights-on'); });
+      doc.body.appendChild(wrap);
+    })();
+    </script>
+    """.replace("__SHOW__", "true" if show else "false")
+    components.html(code, height=0)
+
+
 def render_login():
+    hanging_bulb(True)
+
     # ---- 1) Page title (top) ----
     st.markdown("""
     <div class="hero">
@@ -1278,6 +1355,8 @@ def render_login():
 if not ss.is_logged_in:
     render_login()
     st.stop()
+
+hanging_bulb(False)
 
 # =====================================================================
 # SIDEBAR + NAVIGATION
